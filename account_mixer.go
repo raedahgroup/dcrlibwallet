@@ -9,6 +9,7 @@ import (
 
 	"decred.org/dcrwallet/ticketbuyer"
 	w "decred.org/dcrwallet/wallet"
+	"decred.org/dcrwallet/wallet/udb"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrutil/v3"
 	"github.com/planetdecred/dcrlibwallet/internal/certs"
@@ -19,7 +20,7 @@ const (
 	ShuffleServer      = "cspp.decred.org"
 	MainnetShufflePort = "5760"
 	TestnetShufflePort = "15760"
-	MixedAccountBranch = 0
+	MixedAccountBranch = udb.ExternalBranch
 )
 
 func (mw *MultiWallet) AddAccountMixerNotificationListener(accountMixerNotificationListener AccountMixerNotificationListener, uniqueIdentifier string) error {

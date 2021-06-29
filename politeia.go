@@ -13,6 +13,7 @@ import (
 
 type Politeia struct {
 	mwRef                   *MultiWallet
+	host                    string
 	mu                      sync.RWMutex
 	ctx                     context.Context
 	cancelSync              context.CancelFunc
@@ -34,9 +35,10 @@ const (
 	ProposalCategoryAbandoned
 )
 
-func newPoliteia(mwRef *MultiWallet) (*Politeia, error) {
+func newPoliteia(mwRef *MultiWallet, host string) (*Politeia, error) {
 	p := &Politeia{
 		mwRef:                 mwRef,
+		host:                  host,
 		client:                nil,
 		notificationListeners: make(map[string]ProposalNotificationListener),
 	}

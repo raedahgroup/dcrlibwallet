@@ -17,6 +17,7 @@ import (
 	"decred.org/dcrwallet/wallet"
 	"decred.org/dcrwallet/wallet/txrules"
 	"decred.org/dcrwallet/walletseed"
+	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrutil/v3"
 	"github.com/decred/dcrd/hdkeychain/v3"
@@ -227,6 +228,18 @@ func CalculateDaysBehind(lastHeaderTime int64) string {
 	} else {
 		return fmt.Sprintf("%d days", daysBehind)
 	}
+}
+
+func StringSliceToHash(h []string) ([]*chainhash.Hash, error) {
+	hashes := make([]*chainhash.Hash, 0, len(h))
+	for _, v := range h {
+		hash, err := chainhash.NewHashFromStr(v)
+		if err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes, nil
 }
 
 func roundUp(n float64) int32 {

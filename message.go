@@ -1,8 +1,6 @@
 package dcrlibwallet
 
 import (
-	"time"
-
 	"decred.org/dcrwallet/errors"
 	w "decred.org/dcrwallet/wallet"
 	"github.com/decred/dcrd/dcrec"
@@ -10,17 +8,16 @@ import (
 )
 
 func (wallet *Wallet) SignMessage(passphrase []byte, address string, message string) ([]byte, error) {
-	lock := make(chan time.Time, 1)
-	defer func() {
-		lock <- time.Time{}
-	}()
-
-	ctx := wallet.shutdownContext()
-	err := wallet.internal.Unlock(ctx, passphrase, lock)
+	err := wallet.UnlockWallet(passphrase)
 	if err != nil {
 		return nil, translateError(err)
 	}
+	defer wallet.LockWallet()
 
+	return wallet.signMessage(address, message)
+}
+
+func (wallet *Wallet) signMessage(address string, message string) ([]byte, error) {
 	addr, err := dcrutil.DecodeAddress(address, wallet.chainParams)
 	if err != nil {
 		return nil, translateError(err)
@@ -37,7 +34,7 @@ func (wallet *Wallet) SignMessage(passphrase []byte, address string, message str
 		return nil, errors.New(ErrInvalidAddress)
 	}
 
-	sig, err = wallet.internal.SignMessage(ctx, message, addr)
+	sig, err = wallet.internal.SignMessage(wallet.shutdownContext(), message, addr)
 	if err != nil {
 		return nil, translateError(err)
 	}

@@ -8,12 +8,17 @@ import (
 
 	"decred.org/dcrwallet/errors"
 	w "decred.org/dcrwallet/wallet"
+	"decred.org/dcrwallet/wallet/udb"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrutil/v3"
 	"github.com/planetdecred/dcrlibwallet/addresshelper"
 )
 
-const AddressGapLimit uint32 = 20
+const (
+	AddressGapLimit       uint32 = 20
+	ImportedAccountNumber        = udb.ImportedAddrAccount
+	DefaultAccountNum            = udb.DefaultAccountNum
+)
 
 func (wallet *Wallet) GetAccounts() (string, error) {
 	accountsResponse, err := wallet.GetAccountsRaw()

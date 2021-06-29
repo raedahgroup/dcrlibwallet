@@ -1,21 +1,30 @@
 package dcrlibwallet
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/asdine/storm"
+	tkv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"
 	www "github.com/decred/politeia/politeiawww/api/www/v1"
 )
 
 const (
 	retryInterval = 15 // 15 seconds
+
+	// VoteBitYes is the string value for identifying "yes" vote bits
+	VoteBitYes = "yes"
+	// VoteBitNo is the string value for identifying "no" vote bits
+	VoteBitNo = "no"
 )
 
 // Sync fetches all proposals from the server and
-func (p *Politeia) Sync(host string) error {
+func (p *Politeia) Sync() error {
 
 	p.mu.Lock()
 
@@ -27,20 +36,16 @@ func (p *Politeia) Sync(host string) error {
 	log.Info("Politeia sync: started")
 
 	p.ctx, p.cancelSync = p.mwRef.contextWithShutdownCancel()
-	p.client = newPoliteiaClient(host)
 	defer p.resetSyncData()
 
 	p.mu.Unlock()
 
 	for {
-		// fetch server policy if it's not been fetched
-		if p.client.policy == nil {
-			err := p.client.loadServerPolicy()
-			if err != nil {
-				log.Errorf("Error fetching for politeia server policy: %v", err)
-				time.Sleep(retryInterval * time.Second)
-				continue
-			}
+		_, err := p.getClient()
+		if err != nil {
+			log.Errorf("Error fetching for politeia server policy: %v", err)
+			time.Sleep(retryInterval * time.Second)
+			continue
 		}
 
 		if done(p.ctx) {
@@ -49,7 +54,7 @@ func (p *Politeia) Sync(host string) error {
 
 		log.Info("Politeia sync: checking for updates")
 
-		err := p.checkForUpdates()
+		err = p.checkForUpdates()
 		if err != nil {
 			log.Errorf("Error checking for politeia updates: %v", err)
 			time.Sleep(retryInterval * time.Second)
@@ -226,11 +231,11 @@ func (p *Politeia) fetchAllUnfetchedProposals(tokenInventory *www.TokenInventory
 
 	broadcastNotification := len(savedTokens) > 0
 
-	approvedTokens, savedTokens := p.getUniqueTokens(tokenInventory.Approved, savedTokens)
-	rejectedTokens, savedTokens := p.getUniqueTokens(tokenInventory.Rejected, savedTokens)
-	abandonedTokens, savedTokens := p.getUniqueTokens(tokenInventory.Abandoned, savedTokens)
-	preTokens, savedTokens := p.getUniqueTokens(tokenInventory.Pre, savedTokens)
-	activeTokens, _ := p.getUniqueTokens(tokenInventory.Active, savedTokens)
+	approvedTokens, savedTokens := getUniqueTokens(tokenInventory.Approved, savedTokens)
+	rejectedTokens, savedTokens := getUniqueTokens(tokenInventory.Rejected, savedTokens)
+	abandonedTokens, savedTokens := getUniqueTokens(tokenInventory.Abandoned, savedTokens)
+	preTokens, savedTokens := getUniqueTokens(tokenInventory.Pre, savedTokens)
+	activeTokens, _ := getUniqueTokens(tokenInventory.Active, savedTokens)
 
 	inventoryMap := map[int32][]string{
 		ProposalCategoryPre:       preTokens,
@@ -334,22 +339,16 @@ func (p *Politeia) fetchBatchProposals(category int32, tokens []string, broadcas
 	return nil
 }
 
-func (p *Politeia) FetchProposalDescription(politeiaHost, token string) (string, error) {
+func (p *Politeia) FetchProposalDescription(token string) (string, error) {
 
 	proposal, err := p.GetProposalRaw(token)
 	if err != nil {
 		return "", err
 	}
 
-	p.mu.Lock()
-	client := p.client
-	p.mu.Unlock()
-	if client == nil {
-		client = newPoliteiaClient(politeiaHost)
-		err := client.loadServerPolicy()
-		if err != nil {
-			return "", err
-		}
+	client, err := p.getClient()
+	if err != nil {
+		return "", err
 	}
 
 	proposalDetailsReply, err := client.proposalDetails(token)
@@ -379,6 +378,171 @@ func (p *Politeia) FetchProposalDescription(politeiaHost, token string) (string,
 	}
 
 	return "", errors.New(ErrNotExist)
+}
+
+func (p *Politeia) ProposalVoteDetailsRaw(walletID int, token string) (*ProposalVoteDetails, error) {
+	wal := p.mwRef.WalletWithID(walletID)
+	if wal == nil {
+		return nil, fmt.Errorf(ErrWalletNotFound)
+	}
+
+	client, err := p.getClient()
+	if err != nil {
+		return nil, err
+	}
+
+	detailsReply, err := client.voteDetails(token)
+	if err != nil {
+		return nil, err
+	}
+
+	votesResults, err := client.voteResults(token)
+	if err != nil {
+		return nil, err
+	}
+
+	hashes, err := StringSliceToHash(detailsReply.Vote.EligibleTickets)
+	if err != nil {
+		return nil, err
+	}
+
+	ticketHashes, addresses, err := wal.internal.CommittedTickets(wal.shutdownContext(), hashes)
+	if err != nil {
+		return nil, err
+	}
+
+	castVotes := make(map[string]string)
+	for _, v := range votesResults.Votes {
+		castVotes[v.Ticket] = v.VoteBit
+	}
+
+	var eligibletickets = make([]*EligibleTicket, 0)
+	var votedTickets = make([]*ProposalVote, 0)
+	var yesVotes, noVotes int32
+	for i := 0; i < len(ticketHashes); i++ {
+
+		eligibleticket := &EligibleTicket{
+			Hash:    ticketHashes[i].String(),
+			Address: addresses[i].Address(),
+		}
+
+		ainfo, err := wal.AddressInfo(eligibleticket.Address)
+		if err != nil {
+			return nil, err
+		}
+
+		// filter out tickets controlled by imported accounts
+		if ainfo.AccountNumber == ImportedAccountNumber {
+			continue
+		}
+
+		// filter out voted tickets
+		if voteBit, ok := castVotes[eligibleticket.Hash]; ok {
+
+			pv := &ProposalVote{
+				Ticket: eligibleticket,
+			}
+
+			if voteBit == "1" {
+				noVotes++
+				pv.Bit = VoteBitNo
+			} else if voteBit == "2" {
+				yesVotes++
+				pv.Bit = VoteBitYes
+			}
+
+			votedTickets = append(votedTickets, pv)
+			continue
+		}
+
+		eligibletickets = append(eligibletickets, eligibleticket)
+	}
+
+	return &ProposalVoteDetails{
+		EligibleTickets: eligibletickets,
+		Votes:           votedTickets,
+		YesVotes:        yesVotes,
+		NoVotes:         noVotes,
+	}, nil
+}
+
+func (p *Politeia) ProposalVoteDetails(walletID int, token string) (string, error) {
+	voteDetails, err := p.ProposalVoteDetailsRaw(walletID, token)
+	if err != nil {
+		return "", err
+	}
+
+	result, _ := json.Marshal(voteDetails)
+	return string(result), nil
+}
+
+// use politeia client for client
+func (p *Politeia) CastVotes(walletID int, tickets []*EligibleTicket, token, voteBit, passphrase string) error {
+	wal := p.mwRef.WalletWithID(walletID)
+	if wal == nil {
+		return fmt.Errorf(ErrWalletNotFound)
+	}
+
+	client, err := p.getClient()
+	if err != nil {
+		return err
+	}
+
+	detailsReply, err := client.voteDetails(token)
+	if err != nil {
+		return err
+	}
+
+	var voteBitHex string
+	// Verify vote bit
+	for _, vv := range detailsReply.Vote.Params.Options {
+		if vv.ID == voteBit {
+			voteBitHex = strconv.FormatUint(vv.Bit, 16)
+			break
+		}
+	}
+
+	if voteBitHex == "" {
+		return fmt.Errorf(ErrChangingPassphrase)
+	}
+
+	err = wal.UnlockWallet([]byte(passphrase))
+	if err != nil {
+		return translateError(err)
+	}
+	defer wal.LockWallet()
+
+	// sign tickets
+	signatures := make([][]byte, 0)
+	for _, ticket := range tickets {
+
+		msg := token + ticket.Hash + voteBitHex
+
+		signature, err := wal.signMessage(ticket.Address, msg)
+		if err != nil {
+			return err
+		}
+
+		signatures = append(signatures, signature)
+	}
+
+	// packup votes
+	votes := make([]tkv1.CastVote, 0)
+	for i := 0; i < len(tickets); i++ {
+		ticket := tickets[i]
+
+		signature := hex.EncodeToString(signatures[i])
+		singleVote := tkv1.CastVote{
+			Token:     token,
+			Ticket:    ticket.Hash,
+			VoteBit:   voteBitHex,
+			Signature: signature,
+		}
+
+		votes = append(votes, singleVote)
+	}
+
+	return client.sendVotes(votes)
 }
 
 func (p *Politeia) AddNotificationListener(notificationListener ProposalNotificationListener, uniqueIdentifier string) error {
@@ -450,7 +614,7 @@ func getVotesCount(options []www.VoteOptionResult) (int32, int32) {
 	return yes, no
 }
 
-func (p *Politeia) getUniqueTokens(tokenInventory, savedTokens []string) ([]string, []string) {
+func getUniqueTokens(tokenInventory, savedTokens []string) ([]string, []string) {
 	var diff []string
 
 	for i := range tokenInventory {

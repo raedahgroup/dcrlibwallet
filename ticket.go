@@ -70,6 +70,16 @@ func (wallet *Wallet) StakingOverview() (stOverview *StakingOverview, err error)
 	return stOverview, nil
 }
 
+// func (wallet *Wallet) CommittedTickets(ticketHashes []string) ([]Transaction, error) {
+// 	var transactions []Transaction
+// 	err := wallet.walletDataDB.Find(q.In("Hash", ticketHashes), &transactions)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	return transactions, nil
+// }
+
 func (wallet *Wallet) GetTickets(startingBlockHash, endingBlockHash []byte, targetCount int32) ([]*TicketInfo, error) {
 	return wallet.getTickets(&GetTicketsRequest{
 		StartingBlockHash: startingBlockHash,
