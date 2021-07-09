@@ -17,6 +17,7 @@ import (
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrutil/v3"
 	"github.com/decred/dcrd/wire"
+	"github.com/planetdecred/dcrlibwallet/utils"
 )
 
 // StakeInfo returns information about wallet stakes, tickets and their statuses.
@@ -375,4 +376,51 @@ func CallVSPTicketInfoAPI(vspHost, pubKeyAddr string) (ticketPurchaseInfo *VSPTi
 		}
 	}
 	return
+}
+
+func remaining(idx int, max, t int64) string {
+	x := (max - int64(idx)) * t
+	if x == 0 {
+		return "imminent"
+	}
+	allsecs := int(time.Duration(x).Seconds())
+	str := ""
+	if allsecs > 604799 {
+		weeks := allsecs / 604800
+		allsecs %= 604800
+		str += fmt.Sprintf("%dw ", weeks)
+	}
+	if allsecs > 86399 {
+		days := allsecs / 86400
+		allsecs %= 86400
+		str += fmt.Sprintf("%dd ", days)
+	}
+	if allsecs > 3599 {
+		hours := allsecs / 3600
+		allsecs %= 3600
+		str += fmt.Sprintf("%dh ", hours)
+	}
+	if allsecs > 59 {
+		mins := allsecs / 60
+		allsecs %= 60
+		str += fmt.Sprintf("%dm ", mins)
+	}
+	if allsecs > 0 {
+		str += fmt.Sprintf("%ds ", allsecs)
+	}
+	return str
+}
+
+// NextTicketPriceRemaining returns the remaning time of a ticket for the next block
+func (mw *MultiWallet) NextTicketPriceRemaining(netType string) (string, error) {
+	params, err := utils.ChainParams(netType)
+	if err != nil {
+		return "", err
+	}
+	bestBestBlock := mw.GetBestBlock()
+	idxBlockInWindow := int(int64(bestBestBlock.Height)%params.StakeDiffWindowSize) + 1
+	blockTime := params.TargetTimePerBlock.Nanoseconds()
+	windowSize := params.StakeDiffWindowSize
+	t := remaining(idxBlockInWindow, windowSize, blockTime)
+	return t, nil
 }
